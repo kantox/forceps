@@ -1,0 +1,87 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+      - master
+      - '*v'
+  pull_request:
+    branches:
+      - '**'
+jobs:
+  test:
+    name: 'Ruby: ${{ matrix.ruby-version }}'
+    runs-on: ubuntu-20.04
+    continue-on-error: ${{ matrix.allow-failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby-version: ['2.4.10']
+        allow-failure: [false]
+        frozen-string: [false]
+        push-gem: [true]
+        include:
+          - ruby-version: '3.2'
+            allow-failure: true
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '3.1'
+            allow-failure: true
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '3.0'
+            allow-failure: true
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '2.7'
+            allow-failure: false
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '2.6'
+            allow-failure: false
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '2.5'
+            allow-failure: false
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '2.4'
+            allow-failure: false
+            frozen-string: true
+            push-gem: false
+          - ruby-version: '2.2.10'
+            allow-failure: false
+            frozen-string: false
+            push-gem: false
+    steps:
+      - uses: actions/checkout@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby-version }}
+          bundler-cache: true # runs 'bundle install' and caches installed gems automatically
+      - run: rake
+      # another option is to search for something like [PUSH_BETA_GEM] in event.payload.commits[0].message
+      - name: Publish Beta to GitHub Packages
+        if: ${{ github.event.ref != 'refs/heads/master' && ! contains(github.event.ref, 'refs/tags') && matrix.push-gem }}
+        run: |
+          # otherwise `gem push` fails. Probably 2.2 does not support credentials file
+          gem update --quiet --system 2.6.12
+
+          mkdir -p $HOME/.gem
+          touch $HOME/.gem/credentials
+          chmod 0600 $HOME/.gem/credentials
+          printf -- "---\n:github: Bearer ${GHP_API_KEY}\n" > $HOME/.gem/credentials
+
+          gem build $GEMSPEC | tee build.log
+          export GEM_VERSION=`grep Version build.log | cut -d ':' -f 2`
+          if [[ $GEM_VERSION =~ beta[0-9]*$ ]]; then
+            echo 'publish beta version'
+            gem push --key github --host https://rubygems.pkg.github.com/${OWNER} *.gem
+          else
+            echo 'Only beta versions are allowed'
+            exit 1
+          fi
+        env:
+          GEMSPEC: ${{github.event.repository.name}}.gemspec
+          GHP_API_KEY: ${{secrets.GITHUB_TOKEN}}
+          OWNER: ${{github.event.repository.owner.login}}
